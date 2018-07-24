@@ -1,6 +1,6 @@
-# Text matching
+# Pytorch--Text matching
 
-This is a code for text matching
+This is a code for text matching,all the Deep model is run on the platform of **pytorch**
 
 It is a competition about [CIKM spanish text matching](https://tianchi.aliyun.com/competition/introduction.htm?spm=5176.100066.0.0.7b7633afFVoLQR&raceId=231661)<br>
 
