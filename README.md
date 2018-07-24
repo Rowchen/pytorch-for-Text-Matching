@@ -4,6 +4,14 @@ This is a code for text matching,all the Deep model is run on the platform of **
 
 It is a competition about [CIKM spanish text matching](https://tianchi.aliyun.com/competition/introduction.htm?spm=5176.100066.0.0.7b7633afFVoLQR&raceId=231661)<br>
 
+## Environment
+python 3.6 or python 3.5
+pytorch 0.4.0 for cpu or gpu (This code main runs on cpu)
+tqdm
+scikit-learn
+
+
+
 
 
 The code is organize as follow:<br>
