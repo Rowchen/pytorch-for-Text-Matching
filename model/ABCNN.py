@@ -10,14 +10,14 @@ from torch.autograd import Variable
 import torch.nn.utils as utils
 
 
-class TextCNN(nn.Module):
+class ABCNN(nn.Module):
     def __init__(self,arg,sta_feat=None):
         '''
         wordembed_dim:dim of word embedding
         doc_length:length of a doc,here is a sentence
         the input size is doc_length*wordembed_dim
         '''
-        super(TextCNN,self).__init__()
+        super(ABCNN,self).__init__()
         self.N=arg.doc_length
         V=arg.embed_dim
         Co=arg.kernel_num  #a list
@@ -29,6 +29,8 @@ class TextCNN(nn.Module):
 
         pretrain_weight=tr.from_numpy(arg.pretrained_weight)
         print ('embed_size is ',pretrain_weight.shape)
+        pretrain_weight[:-1,:]/=tr.norm(pretrain_weight[:-1,:],dim=1,keepdim=True)
+
 
         self.embed=nn.Embedding(arg.vocab_size,V)
         self.embed.weight.data.copy_(pretrain_weight)
@@ -36,25 +38,26 @@ class TextCNN(nn.Module):
         self.finetune=arg.finetune
         
         self.branch1 =nn.Sequential(
-            nn.Conv1d(V, Co[0], Ks[0],stride=(1)),
+            nn.Conv1d(V*2, Co[0], Ks[0],stride=(1)),
             nn.ReLU(inplace=True),
             )
         self.branch2 =nn.Sequential(
-            nn.Conv1d(V, Co[1], Ks[1],stride=(1)),
+            nn.Conv1d(V*2, Co[1], Ks[1],stride=(1)),
             nn.ReLU(inplace=True),
             )
         self.branch3 =nn.Sequential(
-            nn.Conv1d(V, Co[2], Ks[2],stride=(1)),
+            nn.Conv1d(V*2, Co[2], Ks[2],stride=(1)),
             nn.ReLU(inplace=True),
             )
         self.branch4 =nn.Sequential(
-            nn.Conv1d(V, Co[3], Ks[3],stride=(1)),
+            nn.Conv1d(V*2, Co[3], Ks[3],stride=(1)),
             nn.ReLU(inplace=True),
             )
         self.branch5 =nn.Sequential(
-            nn.Conv1d(V, Co[4], Ks[4],stride=(1)),
+            nn.Conv1d(V*2, Co[4], Ks[4],stride=(1)),
             nn.ReLU(inplace=True),
             )
+
 
         self.sta_feat=sta_feat
         if sta_feat is not None:
@@ -71,7 +74,6 @@ class TextCNN(nn.Module):
             nn.Dropout(0.5),
             nn.Linear(arg.fc_hiddim,1),
             )
-        print (self.fc)
         
         print (self.branch1)
         #weight init
@@ -88,11 +90,17 @@ class TextCNN(nn.Module):
         '''
         input  x is [n,2,N,V]
         '''
-        emb=self.embed(x[:,:,:self.N])#[num,2,N,V]  self.N is the idx of sta_feat
+        emb=self.embed(x[:,:,:self.N])#[num,2,N,V]
+        s1=emb[:,0,:,:]
+        s2=emb[:,1,:,:]
+        score=s1@(s2.permute(0,2,1))
+        attention_2=F.softmax(score,dim=2) #the attention of s2 for s1,that means : s1~sum(weight*s2)
+        attention_1=F.softmax(score,dim=1).permute(0,2,1)  #the attention of s1 for s2  
+        a1=attention_2@s2
+        a2=attention_1@s1
+        x1=tr.cat([s1,a1],dim=2).permute(0,2,1)
+        x2=tr.cat([s2,a2],dim=2).permute(0,2,1)
         
-        x1=emb[:,0,:,:].permute(0,2,1)
-        x2=emb[:,1,:,:].permute(0,2,1)
-
         out1=self.branch1(x1)
         out2=self.branch2(x1)
         out3=self.branch3(x1)
@@ -125,8 +133,7 @@ class TextCNN(nn.Module):
         out8=F.max_pool1d(out8,out8.size(2)).view(out1.shape[0],-1)
         out9=F.max_pool1d(out9,out9.size(2)).view(out1.shape[0],-1)
         out10=F.max_pool1d(out10,out10.size(2)).view(out1.shape[0],-1)
-
-
+        
         out11=tr.cat([out1,out2,out3,out4,out5,out11,out12,out13,out14,out15],1)
         out12=tr.cat([out6,out7,out8,out9,out10,out16,out17,out18,out19,out20],1)
         delta1=tr.abs(out11-out12)
@@ -140,7 +147,6 @@ class TextCNN(nn.Module):
         
         o2=self.fc(out)
         o3=F.sigmoid(o2).view(-1)
-        
         return o3
     
     def get_opter(self,lr1,lr2):

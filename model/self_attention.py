@@ -8,30 +8,29 @@ import numpy as np
 import torchvision
 from torch.autograd import Variable
 import torch.nn.utils as utils
-
-class TextRNN(nn.Module):
+class AttendRNN(nn.Module):
     def __init__(self,arg,sta_feat=None):
-        super(TextRNN,self).__init__()
+        super(AttendRNN,self).__init__()
         self.N=arg.doc_length
         V=arg.embed_dim
+        self.V=V
         self.weight_decay=arg.weight_decay
         self.lr1=arg.lr1
         self.lr2=arg.lr2
-        
-        #embedding
-        self.embed=nn.Embedding(arg.vocab_size,V,scale_grad_by_freq=True,max_norm=5)
-        self.embed.weight.data.copy_(tr.from_numpy(arg.pretrained_weight))
+
+        #embedding   normalize
+        pretrain_weight=tr.from_numpy(arg.pretrained_weight)
+        self.embed=nn.Embedding(arg.vocab_size,V)
+        self.embed.weight.data.copy_(pretrain_weight)
         self.embed.weight.requires_grad = arg.finetune
         self.finetune=arg.finetune
-        
-        #BiLSTM
-        self.num_layers=arg.num_layers
-        self.hidden_size=arg.hidden_size
-        self.lstm=nn.LSTM(V, 
+
+        self.lstm=nn.GRU(V, 
                           arg.hidden_size, 
                           num_layers=arg.num_layers,
                           batch_first=True,
-                          bidirectional = (arg.useBi==2))
+                          bidirectional = (arg.useBi==2)
+                        )
         
         self.sta_feat=sta_feat
         if sta_feat is not None:
@@ -41,69 +40,90 @@ class TextRNN(nn.Module):
         else:
             add_dim=0
             
-        #fc
         self.fc = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(self.hidden_size*2*2*arg.useBi+add_dim,arg.fc_hiddim),
+            nn.Linear(arg.hidden_size*arg.useBi*4+add_dim,arg.fc_hiddim),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
             nn.Linear(arg.fc_hiddim,1)
         )
-         #weight init
+
+        #weight ini
         init.xavier_normal_(self.fc[1].weight.data, gain=np.sqrt(1))
         init.xavier_normal_(self.fc[4].weight.data, gain=np.sqrt(1))
         init.xavier_normal_(self.lstm.all_weights[0][0], gain=np.sqrt(1))
         init.xavier_normal_(self.lstm.all_weights[0][1], gain=np.sqrt(1))
         
         
+        self.sigma=nn.Parameter(tr.Tensor([0.95]))
+        self.sigma.requires_grad=False
+        self.dist=tr.empty(self.N,self.N).float()
+        self.dist.requires_grad=False
+        for i in range(self.N):
+            for j in range(self.N):
+                self.dist[i,j]=(i-j)*(i-j)
+        self.dist=self.dist.cuda()
+               
+        self.count=0
+        
+       
         
     def forward(self,x):
         '''
         input  x is [n,2,N,V]
         '''
+       
+        B=x.size(0)
         emb=self.embed(x[:,:,:self.N])#[num,2,N,V]  self.N is the idx of sta_feat
         x1=emb[:,0,:,:]
         x2=emb[:,1,:,:]
-  
-        
-        o1a,_=self.lstm(x1)
-        o1b,_=self.lstm(x2)
-        
-        o2a=o1a.permute(0,2,1)
-        o2b=o1b.permute(0,2,1)#(batch,hidden,seq)
-        
-        o3a=F.avg_pool1d(o2a,o2a.size(2)).squeeze()
-        o4a=F.max_pool1d(o2a,o2a.size(2)).squeeze()
-        o5a=tr.cat([o3a,o4a],1)
-        
-        o3b=F.avg_pool1d(o2b,o2b.size(2)).squeeze()
-        o4b=F.max_pool1d(o2b,o2b.size(2)).squeeze()
-        o5b=tr.cat([o3b,o4b],1)
-        
-        delta1=tr.abs(o5a-o5b)     
 
-        o6a=o5a/tr.sqrt(tr.sum(o5a**2,dim=1,keepdim=True))
-        o6b=o5b/tr.sqrt(tr.sum(o5b**2,dim=1,keepdim=True))
-        delta2=o6a*o6b
+        #calculate the self-attention
+        o1a,_=self.lstm(x1)
+        o2a=o1a
+        o3a=o2a@(o2a.permute(0,2,1))#(b,N,N),self-attention
+        o3a=o3a-self.dist/self.sigma[0]
         
+        o4a=F.softmax(o3a,dim=2)#attention proba
+        o5a=(o4a@o2a).permute(0,2,1)#(b,da,N)
+        o6a=F.avg_pool1d(o5a,o5a.size(2)).squeeze()
+        o7a=F.max_pool1d(o5a,o5a.size(2)).squeeze()
+        o8a=tr.cat([o6a,o7a],1)
+
+        o1b,_=self.lstm(x2)
+        o2b=o1b
+        o3b=o2b@(o2b.permute(0,2,1))#(b,N,N),self-attention
+        #here some model add the sequence impact!!  score=(eij+di-j),the  word j is more far from word i ,the score is lower!
+        o3b=o3b-self.dist/self.sigma[0]
+        
+        o4b=F.softmax(o3b,dim=2)#attention proba   here dim=1 or dim=2 has different meaning!!!!!
+        o5b=(o4b@o2b).permute(0,2,1)#(b,da,N)
+        o6b=F.avg_pool1d(o5b,o5b.size(2)).squeeze()
+        o7b=F.max_pool1d(o5b,o5b.size(2)).squeeze()
+        o8b=tr.cat([o6b,o7b],1)
+
+        delta1=tr.abs(o8a-o8b)    
+        delta2=o8a*o8b
         
         idx=x[:,0,-1]
         if self.sta_feat is not None:
             out=tr.cat([delta1,delta2,self.sta_feat[idx]],1)
         else:
             out=tr.cat([delta1,delta2],1)
+
+        out=F.sigmoid(self.fc(out)).view(-1)
+        self.count+=1
+#         if self.count%100==0:
+#             print (self.sigma[0])
         
-        out2=F.sigmoid(self.fc(out)).view(-1)
-        
-        return out2
+        return out
     
     
     
     
     def get_opter(self,lr1,lr2):
         ignored_params = list(map(id, self.embed.parameters()))
-        base_params = filter(lambda p: id(p) not in ignored_params,
-                        self.parameters())
+        base_params = filter(lambda p: id(p) not in ignored_params , self.parameters())
         if not self.finetune:
             opter=opt.Adam ([dict(params=base_params,weight_decay =self.weight_decay,lr=lr1)])
         else:
