@@ -5,8 +5,120 @@ import Levenshtein
 from tqdm import tqdm
 from utils import *
 import io
+import gc
+def change_sent(s1,s2):
+    s_word1=s1.strip().split()
+    c=np.random.randint(0,len(s_word1),1)[0]
+    news1=s_word1[c:]
+    news1.extend(s_word1[:c])
+                        
+    s_word2=s2.strip().split()
+    c=np.random.randint(0,len(s_word2),1)[0]
+    news2=s_word2[c:]
+    news2.extend(s_word2[:c])
+    
+    return [" ".join(news2)," ".join(news1)]
 
+def find_pos_set(data):
+    ls=data[data['tag']==1].reset_index(drop=True)
+    union_set=[]
+    his_dict={}
+    ls1=ls['sp1'].values
+    ls2=ls['sp2'].values
+    print (ls1.shape[0])
+    for row in range(ls1.shape[0]):
+        s1=ls1[row]
+        s2=ls2[row]
+        if s1 not in his_dict:
+            his_dict[s1]=set([s1])
+        if s2 not in his_dict:
+            his_dict[s2]=set([s2])
+        '''his_dict[s1] is a sentence sets in the training data are similar to s1'''
+        his_dict[s1].add(s2)
+        his_dict[s2].add(s1)
+        
+        flags1=flags2=True
+        id1=id2=-1
+        for i,us in enumerate(union_set):
+            if s1 in us:
+                id1=i
+                flags1=False
+            if s2 in us:
+                id2=i
+                flags2=False
+        '''can not find s1 and s2'''
+        if flags1&flags2:
+            union_set.append(set([s1,s2]))
+            
+        '''find s1 without s2'''
+        if (not flags1)&(flags2):
+            union_set[id1].add(s2)
+            
+        '''find s1 without s2'''
+        if (flags1)&(not flags2):
+            union_set[id2].add(s1)
+            
+        '''find s1 and s2 and they are in different set'''
+        if (not flags1)&(not flags2):
+            if id1!=id2:
+                union_set[id1]= (union_set[id1]|union_set[id2])
+                del union_set[id2]
+    
+    np.random.seed(2018)
+    new_data=[]
+    for us in union_set:
+        for s1 in us:
+            for s2 in us:
+                if s2 not in his_dict[s1]:
+                    r=np.random.randint(0,5000)
+                    if r<20:
+                        new_data.append(change_sent(s1,s2))                     
+                        his_dict[s1].add(s2)
+                        his_dict[s2].add(s1)
+    print ('generate postive newdata ',len(new_data))
+    return union_set,new_data
 
+def find_neg_set(data,pos_uni):
+    gc.collect()
+    pos_dict={}
+    for us in pos_uni:
+        for s1 in us:
+            for s2 in us:
+                if s1 not in pos_dict:
+                    pos_dict[s1]=list([s2])
+                else:
+                    pos_dict[s1].append(s2)
+                if s2 not in pos_dict:
+                    pos_dict[s2]=list([s1])
+                else:
+                    pos_dict[s2].append(s1)
+    print (len(pos_dict))
+    
+    ls=data[data['tag']==0].reset_index(drop=True)
+    ls1=ls['sp1'].values
+    ls2=ls['sp2'].values
+    new_data=[]
+    np.random.seed(2018)
+    for row in range(ls1.shape[0]):
+        s1=ls1[row]
+        s2=ls2[row]
+        if s1 in pos_dict and s2 not in pos_dict:
+            idx=np.random.randint(0,len(pos_dict[s1]))
+            new_data.append(change_sent(pos_dict[s1][idx],s2))
+            
+        if s2 in pos_dict and s1 not in pos_dict:
+            idx=np.random.randint(0,len(pos_dict[s2]))
+            new_data.append(change_sent(s1,pos_dict[s2][idx]))
+        
+        if s1 in pos_dict and s2 in pos_dict :
+            if s2 in pos_dict[s1] or s1 in pos_dict[s2]:
+                continue
+            idx1=np.random.randint(0,len(pos_dict[s1]))
+            idx2=np.random.randint(0,len(pos_dict[s2]))
+            new_data.append(change_sent(pos_dict[s1][idx1],pos_dict[s2][idx2]))
+            
+    print ('generate negtive newdata ',len(new_data))
+    return new_data
 def text_preprocess2(raw_text):
     raw_text=raw_text.strip().lower()
     words=re.sub('!|,|\.|\?|\(|\)|:|\*|/|%|&|#|"|`|;|}', ' ', raw_text)
