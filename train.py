@@ -65,7 +65,7 @@ com_arg=param()
 x_test=tr.from_numpy(test_embed).long().to(device)
 
 
-for runseed in [1000,2001,3000,4000,5000,6000,7000,8000,9000,10000]:
+for runseed in [1000,2001,3000,4000,5000,5555,6666,7777,8888,9999]:
     np.random.seed(runseed)
     r1=(np.random.uniform(0,1,train_embed.shape[0])*5).astype(int)
 
