@@ -26,5 +26,5 @@ run the file `runme.py` in the dir `data_propresse`
 ## Train 
 run the file `train.py` 
 
-## stacking
-run the file `stacking.py`
+## ensemble
+run the file `ensemble2.py`
